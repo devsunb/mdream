@@ -22,8 +22,13 @@ import { filterPlugin, frontmatterPlugin, headingAnchorPlugin, isolateMainPlugin
  * @returns HTML to Markdown options with configured plugins
  */
 export function withMinimalPreset(
-  options: HTMLToMarkdownOptions = {},
+  options: HTMLToMarkdownOptions & {
+    /** Additional CSS selectors to exclude (merged with defaults) */
+    exclude?: (string | number)[]
+  } = {},
 ): HTMLToMarkdownOptions {
+  const { exclude: userExclude, ...rest } = options
+
   const filter = filterPlugin({
     exclude: [
       TAG_FORM,
@@ -38,6 +43,7 @@ export function withMinimalPreset(
       TAG_SELECT,
       TAG_BUTTON,
       TAG_NAV,
+      ...(userExclude || []),
     ],
   })
 
@@ -51,13 +57,13 @@ export function withMinimalPreset(
     tailwindPlugin(),
     headingAnchorPlugin(),
     // User plugins before filter - allows overriding exclusions
-    ...(options.plugins || []),
+    ...(rest.plugins || []),
     // Filter out unwanted tags last
     filter,
   ]
 
   return {
-    ...options,
+    ...rest,
     plugins,
   }
 }

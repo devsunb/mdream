@@ -22,6 +22,8 @@ export interface CrawlOptions {
   globPatterns?: ParsedUrlPattern[]
   crawlDelay?: number
   exclude?: string[]
+  /** CSS selectors to exclude from content (e.g. '.sidebar', '#ads') */
+  excludeSelectors?: string[]
   siteNameOverride?: string
   descriptionOverride?: string
   verbose?: boolean
