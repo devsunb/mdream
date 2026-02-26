@@ -23,8 +23,13 @@ import { filterPlugin, frontmatterPlugin, headingAnchorPlugin, isolateMainPlugin
  * @returns HTML to Markdown options with configured plugins
  */
 export function withMinimalPreset(
-  options: HTMLToMarkdownOptions = {},
+  options: HTMLToMarkdownOptions & {
+    /** Additional CSS selectors to exclude (merged with defaults) */
+    exclude?: (string | number)[]
+  } = {},
 ): HTMLToMarkdownOptions {
+  const { exclude: userExclude, ...rest } = options
+
   // Create plugins array with necessary plugins
   const plugins: Plugin[] = [
     // First extract frontmatter from head section
@@ -49,16 +54,17 @@ export function withMinimalPreset(
         TAG_SELECT,
         TAG_BUTTON,
         TAG_NAV,
+        ...(userExclude || []),
       ],
     }),
   ]
   // Include any existing plugins from options
-  if (options.plugins) {
-    plugins.push(...options.plugins)
+  if (rest.plugins) {
+    plugins.push(...rest.plugins)
   }
 
   return {
-    ...options,
+    ...rest,
     plugins,
   }
 }

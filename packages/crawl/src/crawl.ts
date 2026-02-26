@@ -140,6 +140,7 @@ export async function crawlAndGenerate(options: CrawlOptions, onProgress?: (prog
     globPatterns = [],
     crawlDelay,
     exclude = [],
+    excludeSelectors,
     siteNameOverride,
     descriptionOverride,
     verbose = false,
@@ -478,6 +479,7 @@ export async function crawlAndGenerate(options: CrawlOptions, onProgress?: (prog
         // Convert HTML to Markdown only for matching URLs
         md = htmlToMarkdown(html, withMinimalPreset({
           origin: pageOrigin,
+          exclude: excludeSelectors,
         }))
       }
 

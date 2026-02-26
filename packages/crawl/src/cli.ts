@@ -264,6 +264,7 @@ Options:
   --max-pages <number>        Maximum pages to crawl (default: unlimited)
   --crawl-delay <seconds>     Crawl delay in seconds
   --exclude <pattern>         Exclude URLs matching glob patterns (can be used multiple times)
+  --exclude-selector <sel>    Exclude elements by CSS selector (can be used multiple times, e.g. '.sidebar', '#ads')
   --skip-sitemap              Skip sitemap.xml and robots.txt discovery
   -v, --verbose               Enable verbose logging
   -h, --help                  Show this help message
@@ -347,6 +348,9 @@ Examples:
       process.exit(1)
     }
   }
+
+  // Parse CSS exclude selectors
+  const excludeSelectorPatterns = getArgValues('--exclude-selector')
 
   // Validate exclude patterns
   const excludePatterns = getArgValues('--exclude')
@@ -453,6 +457,7 @@ Examples:
     globPatterns: patterns,
     crawlDelay: crawlDelayStr ? Number.parseInt(crawlDelayStr) : undefined,
     exclude: excludePatterns.length > 0 ? excludePatterns : undefined,
+    excludeSelectors: excludeSelectorPatterns.length > 0 ? excludeSelectorPatterns : undefined,
     verbose,
     skipSitemap,
   }
