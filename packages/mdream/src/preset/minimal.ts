@@ -14,7 +14,7 @@ import {
   TAG_SELECT,
   TAG_TEXTAREA,
 } from '../const.ts'
-import { filterPlugin, frontmatterPlugin, isolateMainPlugin, tailwindPlugin } from '../plugins.ts'
+import { filterPlugin, frontmatterPlugin, headingAnchorPlugin, isolateMainPlugin, tailwindPlugin } from '../plugins.ts'
 
 /**
  * Creates a configurable minimal preset with advanced options
@@ -32,6 +32,7 @@ export function withMinimalPreset(
     // Then isolate main content
     isolateMainPlugin(),
     tailwindPlugin(),
+    headingAnchorPlugin(),
     // Then filter out unwanted tags
     filterPlugin({
       exclude: [
