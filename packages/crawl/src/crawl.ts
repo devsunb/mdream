@@ -437,6 +437,64 @@ export async function crawlAndGenerate(options: CrawlOptions, onProgress?: (prog
         return
       }
 
+      // Detect GitHub-served .md files via x-raw-download header and fetch raw content directly.
+      // This covers both github.com and custom domains (e.g. code.claude.com) that proxy to GitHub.
+      const xRawDownload = response?.headers?.['x-raw-download']
+      if (typeof xRawDownload === 'string' && xRawDownload.endsWith('.md')) {
+        const rawResponse = await fetch(xRawDownload, {
+          headers: { 'User-Agent': 'mdream-crawler/1.0' },
+        })
+        const rawMd = await rawResponse.text()
+        const displayUrl = request.loadedUrl
+        const pageOrigin = origin || new URL(displayUrl).origin
+
+        if (onPage) {
+          const pageData: PageData = {
+            url: displayUrl,
+            html: rawMd,
+            title: '',
+            metadata: { title: '', description: '', links: [] },
+            origin: pageOrigin,
+          }
+          await onPage(pageData)
+        }
+
+        let filePath: string | undefined
+
+        if (generateIndividualMd) {
+          const urlObj = new URL(displayUrl)
+          const urlPath = urlObj.pathname === '/' ? '/index' : urlObj.pathname
+          const pathSegments = urlPath.replace(/\/$/, '').split('/').filter(seg => seg.length > 0)
+          const safeSegments = pathSegments.map(seg => seg.replace(/[^\w\-]/g, '-'))
+          const filename = safeSegments.length > 0 ? safeSegments.join('/') : 'index'
+          const safeFilename = normalize(`${filename}.md`)
+
+          filePath = join(outputDir, safeFilename)
+
+          const fileDir = dirname(filePath)
+          if (fileDir && !existsSync(fileDir)) {
+            mkdirSync(fileDir, { recursive: true })
+          }
+          await writeFile(filePath, rawMd, 'utf-8')
+        }
+
+        const result: CrawlResult = {
+          url: displayUrl,
+          title: '',
+          content: rawMd,
+          filePath,
+          timestamp: startTime,
+          success: true,
+          metadata: { title: '', description: '', links: [] },
+          depth: request.userData?.depth || 0,
+        }
+
+        results.push(result)
+        progress.crawling.processed = results.length
+        onProgress?.(progress)
+        return
+      }
+
       // Determine home page URL for metadata extraction
       const homePageUrl = new URL(startingUrls[0]).origin
 
