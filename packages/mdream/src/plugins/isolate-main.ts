@@ -1,5 +1,5 @@
 import type { ElementNode, Plugin } from '../types.ts'
-import { ELEMENT_NODE, TAG_FOOTER, TAG_H1, TAG_H2, TAG_H3, TAG_H4, TAG_H5, TAG_H6, TAG_HEAD, TAG_HEADER, TAG_MAIN, TEXT_NODE } from '../const.ts'
+import { ELEMENT_NODE, TAG_FOOTER, TAG_H1, TAG_H2, TAG_H3, TAG_H4, TAG_H5, TAG_H6, TAG_HEAD, TAG_HEADER, TAG_MAIN, TAG_NAV, TEXT_NODE } from '../const.ts'
 import { createPlugin } from '../pluggable/plugin.ts'
 
 /**
@@ -75,22 +75,22 @@ export function isolateMainPlugin(): Plugin {
         }
 
         // Priority 2: Fallback to header-footer heuristic if no main element
-        // Look for first header that's NOT inside a <header> tag
+        // Look for first header that's NOT inside a <header> or <nav> tag
         if (!firstHeaderElement && element.tagId !== undefined && headerTagIds.has(element.tagId)) {
-          // Check if this heading is inside a <header> tag
+          // Check if this heading is inside a <header> or <nav> tag
           let current = element.parent
-          let isInHeaderTag = false
+          let isInSkippedContainer = false
 
           while (current) {
-            if (current.tagId === TAG_HEADER) {
-              isInHeaderTag = true
+            if (current.tagId === TAG_HEADER || current.tagId === TAG_NAV) {
+              isInSkippedContainer = true
               break
             }
             current = current.parent as ElementNode | null
           }
 
-          // Only use this heading if it's not in a header tag
-          if (!isInHeaderTag) {
+          // Only use this heading if it's not in a header/nav tag
+          if (!isInSkippedContainer) {
             firstHeaderElement = element
             return // Include the header
           }

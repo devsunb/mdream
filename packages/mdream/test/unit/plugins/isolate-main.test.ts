@@ -392,6 +392,59 @@ describe('isolateMainPlugin', () => {
     expect(markdown).not.toContain('Text after footer')
   })
 
+  it('ignores deep headings in dialogs before main element', () => {
+    // Simulates GitHub pages where dialog overlays contain headings before <main>
+    const html = `
+      <html>
+        <body>
+          <div class="header-wrapper">
+            <header>
+              <div>
+                <dialog-helper>
+                  <dialog>
+                    <div>
+                      <div>
+                        <div>
+                          <h1>Provide feedback</h1>
+                        </div>
+                      </div>
+                    </div>
+                    <div>
+                      <div>
+                        <div>
+                          <h1>Saved searches</h1>
+                          <h2>Use saved searches to filter your results more quickly</h2>
+                        </div>
+                      </div>
+                    </div>
+                  </dialog>
+                </dialog-helper>
+              </div>
+            </header>
+          </div>
+          <div class="application-main">
+            <main>
+              <h1>CHANGELOG</h1>
+              <p>Main content here.</p>
+            </main>
+          </div>
+          <footer>Footer</footer>
+        </body>
+      </html>
+    `
+
+    const markdown = htmlToMarkdown(html, {
+      plugins: [isolateMainPlugin()],
+    })
+
+    expect(markdown).toContain('# CHANGELOG')
+    expect(markdown).toContain('Main content here.')
+    expect(markdown).not.toContain('Provide feedback')
+    expect(markdown).not.toContain('Saved searches')
+    expect(markdown).not.toContain('Use saved searches')
+    expect(markdown).not.toContain('Footer')
+  })
+
   it('handles edge case with footer as direct sibling of header', () => {
     const html = `
       <body>
