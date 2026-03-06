@@ -8,6 +8,7 @@ import { createPlugin } from '../pluggable/plugin.ts'
  * Targets:
  * - Docusaurus: <a class="hash-link" href="#id" title="Direct link to ...">
  * - VitePress: <a class="header-anchor" href="#id" aria-label="Permalink to ...">
+ * - Ghostty/jumplink: <a class="...jumplink..." href="#id">
  * - Generic: <a aria-hidden="true" href="#id"> inside h1-h6
  */
 export function headingAnchorPlugin(): Plugin {
@@ -49,6 +50,11 @@ function isHeadingAnchorElement(element: ElementNode): boolean {
 
   // VitePress
   if (cls.includes('header-anchor')) {
+    return true
+  }
+
+  // Ghostty / jumplink-style heading anchors (sibling of heading)
+  if (cls.includes('jumplink')) {
     return true
   }
 

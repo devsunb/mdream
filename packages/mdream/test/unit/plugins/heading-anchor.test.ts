@@ -54,6 +54,21 @@ describe('headingAnchorPlugin', () => {
     expect(markdown).toBe('## 2.1.66')
   })
 
+  it('removes Ghostty jumplink-style heading anchors (sibling of heading)', () => {
+    const html = `
+      <div>
+        <h2 class="Text-module__text"><code>ignore</code></h2>
+        <a href="#ignore" class="JumplinkHeader-module__SpWIGW__jumplinkCopy">
+          <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" aria-hidden="true"><path d="m7.775 3.275"></path></svg>
+        </a>
+      </div>`
+    const markdown = htmlToMarkdown(html, {
+      plugins: [headingAnchorPlugin()],
+    })
+
+    expect(markdown).toBe('## `ignore`')
+  })
+
   it('preserves normal fragment links outside headings', () => {
     const html = '<p>See <a href="#details">details section</a> below.</p>'
     const markdown = htmlToMarkdown(html, {
