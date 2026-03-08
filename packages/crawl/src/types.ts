@@ -28,6 +28,8 @@ export interface CrawlOptions {
   descriptionOverride?: string
   verbose?: boolean
   skipSitemap?: boolean
+  /** Try fetching URL + '.md' suffix first; use raw markdown when content-type is text/markdown */
+  tryMdSuffix?: boolean
   onPage?: (page: PageData) => Promise<void> | void
 }
 

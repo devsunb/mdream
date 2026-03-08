@@ -153,6 +153,7 @@ export async function crawlAndGenerate(options: CrawlOptions, onProgress?: (prog
     descriptionOverride,
     verbose = false,
     skipSitemap = false,
+    tryMdSuffix = false,
     onPage,
   } = options
 
@@ -493,6 +494,72 @@ export async function crawlAndGenerate(options: CrawlOptions, onProgress?: (prog
         progress.crawling.processed = results.length
         onProgress?.(progress)
         return
+      }
+
+      // Try fetching URL + '.md' suffix for sites that serve raw markdown (e.g. platform.claude.com/docs).
+      if (tryMdSuffix) {
+        const pageUrl = request.loadedUrl
+        const mdUrl = pageUrl.endsWith('/') ? `${pageUrl.slice(0, -1)}.md` : `${pageUrl}.md`
+        try {
+          const mdResponse = await fetch(mdUrl, {
+            headers: { 'User-Agent': 'mdream-crawler/1.0' },
+          })
+          const contentType = mdResponse.headers.get('content-type') || ''
+          if (mdResponse.ok && contentType.startsWith('text/markdown')) {
+            const rawMd = await mdResponse.text()
+            const displayUrl = pageUrl
+            const pageOrigin = origin || new URL(displayUrl).origin
+
+            if (onPage) {
+              const pageData: PageData = {
+                url: displayUrl,
+                html: rawMd,
+                title: '',
+                metadata: { title: '', description: '', links: [] },
+                origin: pageOrigin,
+              }
+              await onPage(pageData)
+            }
+
+            let filePath: string | undefined
+
+            if (generateIndividualMd) {
+              const urlObj = new URL(displayUrl)
+              const urlPath = urlObj.pathname === '/' ? '/index' : urlObj.pathname
+              const pathSegments = urlPath.replace(/\/$/, '').split('/').filter(seg => seg.length > 0)
+              const safeSegments = pathSegments.map(seg => seg.replace(/[^\w\-]/g, '-'))
+              const filename = safeSegments.length > 0 ? safeSegments.join('/') : 'index'
+              const safeFilename = normalize(`${filename}.md`)
+
+              filePath = join(outputDir, safeFilename)
+
+              const fileDir = dirname(filePath)
+              if (fileDir && !existsSync(fileDir)) {
+                mkdirSync(fileDir, { recursive: true })
+              }
+              await writeFile(filePath, rawMd, 'utf-8')
+            }
+
+            const result: CrawlResult = {
+              url: displayUrl,
+              title: '',
+              content: rawMd,
+              filePath,
+              timestamp: startTime,
+              success: true,
+              metadata: { title: '', description: '', links: [] },
+              depth: request.userData?.depth || 0,
+            }
+
+            results.push(result)
+            progress.crawling.processed = results.length
+            onProgress?.(progress)
+            return
+          }
+        }
+        catch {
+          // .md suffix fetch failed, fall through to normal HTML processing
+        }
       }
 
       // Determine home page URL for metadata extraction

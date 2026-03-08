@@ -266,6 +266,7 @@ Options:
   --exclude <pattern>         Exclude URLs matching glob patterns (can be used multiple times)
   --exclude-selector <sel>    Exclude elements by CSS selector (can be used multiple times, e.g. '.sidebar', '#ads')
   --skip-sitemap              Skip sitemap.xml and robots.txt discovery
+  --try-md-suffix             Try fetching URL + '.md' for raw markdown (uses content-type detection)
   -v, --verbose               Enable verbose logging
   -h, --help                  Show this help message
   --version                   Show version number
@@ -436,6 +437,9 @@ Examples:
   // Check for skip-sitemap flag
   const skipSitemap = args.includes('--skip-sitemap')
 
+  // Check for try-md-suffix flag
+  const tryMdSuffix = args.includes('--try-md-suffix')
+
   // Warn if using skip-sitemap with wildcard URLs
   if (skipSitemap && parsed.isGlob) {
     p.log.warn('Warning: Using --skip-sitemap with glob URLs may not discover all matching pages.')
@@ -460,6 +464,7 @@ Examples:
     excludeSelectors: excludeSelectorPatterns.length > 0 ? excludeSelectorPatterns : undefined,
     verbose,
     skipSitemap,
+    tryMdSuffix,
   }
 }
 
@@ -492,6 +497,7 @@ async function main() {
       `Formats: ${formats.join(', ')}`,
       options.exclude && options.exclude.length > 0 && `Exclude: ${options.exclude.join(', ')}`,
       options.skipSitemap && `Skip sitemap: Yes`,
+      options.tryMdSuffix && `Try .md suffix: Yes`,
       options.verbose && `Verbose: Enabled`,
     ].filter(Boolean)
 
