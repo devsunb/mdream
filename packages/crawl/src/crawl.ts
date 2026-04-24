@@ -6,11 +6,13 @@ import { mkdir, writeFile } from 'node:fs/promises'
 import * as p from '@clack/prompts'
 import { generateLlmsTxtArtifacts } from '@mdream/js/llms-txt'
 import { createHooks } from 'hookable'
-import { htmlToMarkdown } from 'mdream'
 import { ofetch } from 'ofetch'
 import { dirname, join, normalize, resolve } from 'pathe'
 import { withHttps } from 'ufo'
-import { getRegistrableDomain, getStartingUrl, isUrlExcluded, isValidSitemapXml, matchesGlobPattern, parseUrlPattern } from './glob-utils.js'
+import { getRegistrableDomain, getStartingUrl, isValidSitemapXml, parseUrlPattern } from './glob-utils.js'
+import { convertPage } from './mdream-convert.js'
+import { tryFetchMdSuffix } from './md-suffix.js'
+import { createShouldCrawl, filterSitemapUrls } from './url-filter.js'
 
 const SITEMAP_INDEX_LOC_RE = /<sitemap[^>]*>.*?<loc>(.*?)<\/loc>.*?<\/sitemap>/gs
 const SITEMAP_URL_LOC_RE = /<url[^>]*>.*?<loc>(.*?)<\/loc>.*?<\/url>/gs
@@ -240,21 +242,6 @@ function extractMetadataInline(parsedUrl: URL, allowedDomains?: Set<string>): {
   }
 }
 
-function filterSitemapUrls(
-  sitemapUrls: string[],
-  hasGlobPatterns: boolean,
-  exclude: string[],
-  allPatterns: ReturnType<typeof parseUrlPattern>[],
-  allowSubdomains = false,
-): string[] {
-  if (hasGlobPatterns) {
-    return sitemapUrls.filter(url =>
-      !isUrlExcluded(url, exclude, allowSubdomains) && allPatterns.some(pattern => matchesGlobPattern(url, pattern, allowSubdomains)),
-    )
-  }
-  return sitemapUrls.filter(url => !isUrlExcluded(url, exclude, allowSubdomains))
-}
-
 // Simple concurrency pool for HTTP fetching
 async function runConcurrent<T>(
   items: T[],
@@ -287,13 +274,17 @@ export async function crawlAndGenerate(options: CrawlOptions, onProgress?: (prog
     globPatterns = [],
     crawlDelay: userCrawlDelay,
     exclude = [],
+    include = [],
     siteNameOverride,
     descriptionOverride,
     verbose = false,
     skipSitemap = false,
     allowSubdomains = false,
+    tryMdSuffix = false,
     hooks: hooksConfig,
     onPage,
+    mdream: mdreamConfig,
+    sites: sitesConfig,
   } = options
 
   // Set up hooks
@@ -330,7 +321,10 @@ export async function crawlAndGenerate(options: CrawlOptions, onProgress?: (prog
   const sitemapAttempts: { url: string, success: boolean, error?: string }[] = []
   let sitemapProvidedUrls = false
 
-  if (startingUrls.length > 0 && !skipSitemap && !singlePageMode) {
+  const effectiveSkipSitemap = skipSitemap
+    || (startingUrls.length > 0 && sitesConfig?.[new URL(startingUrls[0]).hostname]?.skipSitemap)
+
+  if (startingUrls.length > 0 && !effectiveSkipSitemap && !singlePageMode) {
     const baseUrl = new URL(startingUrls[0]).origin
     const homePageUrl = baseUrl
 
@@ -371,7 +365,7 @@ export async function crawlAndGenerate(options: CrawlOptions, onProgress?: (prog
             const robotsUrls = await loadSitemap(sitemapUrl)
             sitemapAttempts.push({ url: sitemapUrl, success: true })
 
-            const filteredUrls = filterSitemapUrls(robotsUrls, hasGlobPatterns, exclude, patterns, allowSubdomains)
+            const filteredUrls = filterSitemapUrls(robotsUrls, { hasGlobPatterns, exclude, include, patterns, allowSubdomains, sitesConfig })
 
             if (hasGlobPatterns) {
               startingUrls = filteredUrls
@@ -399,7 +393,7 @@ export async function crawlAndGenerate(options: CrawlOptions, onProgress?: (prog
       const sitemapUrls = await loadSitemap(mainSitemapUrl)
       sitemapAttempts.push({ url: mainSitemapUrl, success: true })
 
-      const filteredUrls = filterSitemapUrls(sitemapUrls, hasGlobPatterns, exclude, patterns, allowSubdomains)
+      const filteredUrls = filterSitemapUrls(sitemapUrls, { hasGlobPatterns, exclude, include, patterns, allowSubdomains, sitesConfig })
 
       if (hasGlobPatterns) {
         startingUrls = filteredUrls
@@ -430,7 +424,7 @@ export async function crawlAndGenerate(options: CrawlOptions, onProgress?: (prog
             const altUrls = await loadSitemap(sitemapUrl)
             sitemapAttempts.push({ url: sitemapUrl, success: true })
 
-            const filteredUrls = filterSitemapUrls(altUrls, hasGlobPatterns, exclude, patterns, allowSubdomains)
+            const filteredUrls = filterSitemapUrls(altUrls, { hasGlobPatterns, exclude, include, patterns, allowSubdomains, sitesConfig })
 
             if (hasGlobPatterns) {
               startingUrls = filteredUrls
@@ -469,7 +463,7 @@ export async function crawlAndGenerate(options: CrawlOptions, onProgress?: (prog
       p.log.info(`Sitemap: not found, discovering pages via crawler`)
     }
 
-    // Always include home page for metadata extraction
+    // Include home page as a seed for link discovery (saving is gated by shouldCrawlUrl)
     if (!startingUrls.includes(homePageUrl))
       startingUrls.unshift(homePageUrl)
 
@@ -477,7 +471,7 @@ export async function crawlAndGenerate(options: CrawlOptions, onProgress?: (prog
     progress.crawling.total = startingUrls.length
     onProgress?.(progress)
   }
-  else if ((skipSitemap || singlePageMode) && startingUrls.length > 0) {
+  else if ((effectiveSkipSitemap || singlePageMode) && startingUrls.length > 0) {
     progress.sitemap.status = 'completed'
     progress.sitemap.found = 0
     progress.sitemap.processed = 0
@@ -490,6 +484,12 @@ export async function crawlAndGenerate(options: CrawlOptions, onProgress?: (prog
 
   const results: CrawlResult[] = []
   const processedUrls = new Set<string>()
+
+  // Pre-compute allowed hostnames from starting URLs for same-origin filtering
+  const allowedHostnames = new Set(startingUrls.map((u) => {
+    try { return new URL(u).hostname }
+    catch { return '' }
+  }).filter(Boolean))
 
   // Pre-compute allowed registrable domains from all starting URLs
   const allowedRegistrableDomains = allowSubdomains
@@ -523,22 +523,16 @@ export async function crawlAndGenerate(options: CrawlOptions, onProgress?: (prog
     }
   }
 
-  const shouldCrawlUrl = (url: string): boolean => {
-    if (isUrlExcluded(url, exclude, allowSubdomains))
-      return false
-    if (!hasGlobPatterns) {
-      if (allowedRegistrableDomains) {
-        try {
-          return allowedRegistrableDomains.has(getRegistrableDomain(new URL(url).hostname))
-        }
-        catch {
-          return false
-        }
-      }
-      return true
-    }
-    return patterns.some(pattern => matchesGlobPattern(url, pattern, allowSubdomains))
-  }
+  const shouldCrawlUrl = createShouldCrawl({
+    include,
+    exclude,
+    sitesConfig,
+    allowSubdomains,
+    hasGlobPatterns,
+    patterns,
+    allowedHostnames,
+    allowedRegistrableDomains,
+  })
 
   const recordLatency = (ms: number) => {
     const lat = progress.crawling.latency
@@ -550,9 +544,6 @@ export async function crawlAndGenerate(options: CrawlOptions, onProgress?: (prog
       lat.max = ms
   }
 
-  // Pre-compute home page URL once
-  const homePageUrl = startingUrls.length > 0 ? new URL(startingUrls[0]).origin : ''
-  const normalizedHomePageUrl = homePageUrl.replace(URL_TRAILING_SLASH_RE, '')
 
   // Track created directories to avoid redundant mkdir calls
   const createdDirs = new Set<string>()
@@ -572,19 +563,17 @@ export async function crawlAndGenerate(options: CrawlOptions, onProgress?: (prog
     const shouldProcessMarkdown = shouldCrawlUrl(url)
     const pageOrigin = sharedOrigin || parsedUrl.origin
 
-    let md: string
-    let metadata: PageMetadata
-    if (isMarkdown) {
-      // Content is already markdown, skip conversion
-      md = content
-      metadata = { title: initialTitle || parsedUrl.pathname, links: [] }
-    }
-    else {
-      // Single htmlToMarkdown call with merged extraction
-      const { extraction, getMetadata } = extractMetadataInline(parsedUrl, allowedRegistrableDomains)
-      md = htmlToMarkdown(content, { origin: pageOrigin, extraction })
-      metadata = getMetadata()
-    }
+    const { md: convertedMd, metadata } = convertPage({
+      content,
+      isMarkdown,
+      parsedUrl,
+      pageOrigin,
+      initialTitle,
+      mdreamConfig,
+      sitesConfig,
+      extractMetadata: parsed => extractMetadataInline(parsed, allowedRegistrableDomains),
+    })
+    let md = convertedMd
     let title = initialTitle || metadata.title
 
     // Call crawl:page hook
@@ -603,7 +592,9 @@ export async function crawlAndGenerate(options: CrawlOptions, onProgress?: (prog
     let filePath: string | undefined
 
     if (shouldProcessMarkdown && generateIndividualMd) {
-      const urlPath = parsedUrl.pathname === '/' ? '/index' : parsedUrl.pathname
+      const rawPath = parsedUrl.pathname === '/' ? '/index' : parsedUrl.pathname
+      // Strip .md extension from URL path since we append .md to filenames
+      const urlPath = rawPath.endsWith('.md') ? rawPath.slice(0, -3) : rawPath
       // Namespace by hostname when subdomains are enabled to avoid path collisions
       const hostPrefix = allowSubdomains ? [parsedUrl.hostname.replace(URL_PATH_UNSAFE_CHARS_RE, '-')] : []
       const pathSegments = urlPath.replace(URL_TRAILING_SLASH_RE, '').split('/').filter(seg => seg.length > 0)
@@ -619,22 +610,26 @@ export async function crawlAndGenerate(options: CrawlOptions, onProgress?: (prog
       md = contentCtx.content
       filePath = contentCtx.filePath
 
-      const fileDir = dirname(filePath)
-      if (fileDir && !createdDirs.has(fileDir)) {
-        await mkdir(fileDir, { recursive: true })
-        createdDirs.add(fileDir)
+      const bodyContent = md.trim().replace(FRONTMATTER_BLOCK_RE, '').trim()
+      if (bodyContent.length > 10) {
+        const fileDir = dirname(filePath)
+        if (fileDir && !createdDirs.has(fileDir)) {
+          await mkdir(fileDir, { recursive: true })
+          createdDirs.add(fileDir)
+        }
+        await writeFile(filePath, md, 'utf-8')
       }
-      await writeFile(filePath, md, 'utf-8')
+      else {
+        filePath = undefined
+      }
     }
 
-    const isHomePage = parsedUrl.pathname === '/' && parsedUrl.origin === normalizedHomePageUrl
-
-    if (shouldProcessMarkdown || isHomePage) {
+    if (shouldProcessMarkdown) {
       const result: CrawlResult = {
         url,
         title,
         content: md,
-        filePath: shouldProcessMarkdown ? filePath : undefined,
+        filePath,
         timestamp: Date.now(),
         success: true,
         metadata,
@@ -648,7 +643,7 @@ export async function crawlAndGenerate(options: CrawlOptions, onProgress?: (prog
 
     // Follow links if enabled, within depth limit, and sitemap didn't already define the crawl surface
     if (followLinks && !singlePageMode && !sitemapProvidedUrls && depth < maxDepth) {
-      const filteredLinks = metadata.links.filter(link => shouldCrawlUrl(link) && isContentUrl(link))
+      const filteredLinks = metadata.links.filter(link => shouldCrawlUrl(link) && (isMarkdown || isContentUrl(link)))
       for (const link of filteredLinks) {
         if (processedUrls.has(link))
           continue
@@ -829,10 +824,20 @@ export async function crawlAndGenerate(options: CrawlOptions, onProgress?: (prog
         const body = response._data ?? ''
         const contentType = response.headers.get('content-type') || ''
         const isHtml = contentType.includes('text/html') || contentType.includes('application/xhtml')
-        const isMarkdown = contentType.includes('text/markdown') || contentType.includes('text/x-markdown')
+        const isLlmsTxt = contentType.includes('text/plain') && /\/llms(?:-full)?\.txt$/.test(url)
+        const isMarkdown = contentType.includes('text/markdown') || contentType.includes('text/x-markdown') || isLlmsTxt
         // Skip non-HTML/non-Markdown responses
         if (!isHtml && !isMarkdown)
           return
+
+        if (!isMarkdown && tryMdSuffix) {
+          const mdBody = await tryFetchMdSuffix(url)
+          if (mdBody !== null) {
+            await processPage(url, mdBody, '', depth, true)
+            return
+          }
+        }
+
         await processPage(url, body, '', depth, isMarkdown)
       }
       catch (error) {

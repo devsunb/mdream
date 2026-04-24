@@ -270,9 +270,12 @@ Options:
   --description <desc>         Override site description (overrides auto-extracted description)
   --max-pages <number>        Maximum pages to crawl (default: unlimited)
   --crawl-delay <seconds>     Crawl delay in seconds
-  --exclude <pattern>         Exclude URLs matching glob patterns (can be used multiple times)
+  -e, --exclude <pattern>     Exclude URLs matching glob patterns (can be used multiple times)
+  -i, --include <pattern>     Include only URLs matching glob patterns (can be used multiple times)
   --skip-sitemap              Skip sitemap.xml and robots.txt discovery
+  --try-md-suffix             Try fetching raw markdown by appending .md to URLs
   --allow-subdomains          Crawl across subdomains of the same root domain
+  -c, --config <path>         Path to mdream.config.ts (default: auto-detect in cwd)
   -v, --verbose               Enable verbose logging
   -h, --help                  Show this help message
   --version                   Show version number
@@ -282,8 +285,9 @@ Note: Sitemap discovery and robots.txt checking are automatic unless --skip-site
 Examples:
   @mdream/crawl -u harlanzw.com --artifacts "llms.txt,markdown"
   @mdream/crawl --url https://docs.example.com --depth 2 --artifacts "llms-full.txt"
-  @mdream/crawl -u example.com --exclude "*/admin/*" --exclude "*/api/*"
-  @mdream/crawl -u example.com --verbose
+  @mdream/crawl -u example.com -e "*/admin/*" -e "*/api/*"
+  @mdream/crawl -u example.com -i "*/docs/*" -i "*/guide/*"
+  @mdream/crawl -u example.com -c ./mdream.config.ts
   @mdream/crawl -u example.com --skip-sitemap
   @mdream/crawl -u example.com --driver playwright --single-page
 `)
@@ -358,11 +362,21 @@ Examples:
   }
 
   // Validate exclude patterns
-  const excludePatterns = getArgValues('--exclude')
+  const excludePatterns = [...getArgValues('--exclude'), ...getArgValues('-e')]
   for (const pattern of excludePatterns) {
     const excludeError = validateGlobPattern(pattern)
     if (excludeError) {
       p.log.error(`Error in exclude pattern: ${excludeError}`)
+      process.exit(1)
+    }
+  }
+
+  // Validate include patterns
+  const includePatterns = [...getArgValues('--include'), ...getArgValues('-i')]
+  for (const pattern of includePatterns) {
+    const includeError = validateGlobPattern(pattern)
+    if (includeError) {
+      p.log.error(`Error in include pattern: ${includeError}`)
       process.exit(1)
     }
   }
@@ -442,6 +456,9 @@ Examples:
   // Check for skip-sitemap flag
   const skipSitemap = args.includes('--skip-sitemap')
 
+  // Check for try-md-suffix flag
+  const tryMdSuffix = args.includes('--try-md-suffix')
+
   // Check for allow-subdomains flag
   const allowSubdomains = args.includes('--allow-subdomains')
 
@@ -466,9 +483,11 @@ Examples:
     globPatterns: patterns,
     crawlDelay: crawlDelayStr ? Number.parseInt(crawlDelayStr) : undefined,
     exclude: excludePatterns.length > 0 ? excludePatterns : undefined,
+    include: includePatterns.length > 0 ? includePatterns : undefined,
     verbose,
     skipSitemap,
     allowSubdomains,
+    tryMdSuffix,
   }
 }
 
@@ -476,8 +495,13 @@ async function main() {
   // Try to parse CLI arguments first
   const cliOptions = parseCliArgs()
 
-  // Load config file (mdream.config.ts)
-  const fileConfig = await loadMdreamConfig()
+  // Load config file (mdream.config.ts or --config path)
+  const configArg = (() => {
+    const args = process.argv.slice(2)
+    const idx = args.findIndex(a => a === '--config' || a === '-c')
+    return idx >= 0 && idx + 1 < args.length ? args[idx + 1] : undefined
+  })()
+  const fileConfig = await loadMdreamConfig(undefined, configArg)
 
   let options: CrawlOptions | null
 
@@ -485,6 +509,8 @@ async function main() {
     // Merge: CLI args override config file, arrays concatenate
     const configExclude = fileConfig.exclude || []
     const cliExclude = cliOptions.exclude || []
+    const configInclude = fileConfig.include || []
+    const cliInclude = cliOptions.include || []
     options = {
       ...cliOptions,
       driver: cliOptions.driver || fileConfig.driver || 'http',
@@ -493,10 +519,22 @@ async function main() {
       skipSitemap: cliOptions.skipSitemap || fileConfig.skipSitemap || false,
       allowSubdomains: cliOptions.allowSubdomains || fileConfig.allowSubdomains || false,
       verbose: cliOptions.verbose || fileConfig.verbose || false,
+      tryMdSuffix: cliOptions.tryMdSuffix || fileConfig.tryMdSuffix || false,
       exclude: configExclude.length > 0 || cliExclude.length > 0
         ? [...configExclude, ...cliExclude]
         : undefined,
+      include: configInclude.length > 0 || cliInclude.length > 0
+        ? [...configInclude, ...cliInclude]
+        : undefined,
       hooks: fileConfig.hooks,
+      mdream: fileConfig.mdream,
+      sites: fileConfig.sites,
+      // Config artifacts override defaults when CLI --artifacts is not specified
+      ...(fileConfig.artifacts && !process.argv.includes('--artifacts') ? {
+        generateLlmsTxt: fileConfig.artifacts.includes('llms.txt'),
+        generateLlmsFullTxt: fileConfig.artifacts.includes('llms-full.txt'),
+        generateIndividualMd: fileConfig.artifacts.includes('markdown'),
+      } : {}),
     }
 
     // Show non-interactive summary when using CLI args
@@ -515,9 +553,12 @@ async function main() {
       `Output: ${relative(process.cwd(), options.outputDir) || '.'}`,
       `Driver: ${options.driver} \u00B7 Depth: ${options.maxDepth}`,
       `Formats: ${formats.join(', ')}`,
+      options.include && options.include.length > 0 && `Include: ${options.include.join(', ')}`,
       options.exclude && options.exclude.length > 0 && `Exclude: ${options.exclude.join(', ')}`,
       options.skipSitemap && `Skip sitemap: Yes`,
+      options.tryMdSuffix && `Try MD suffix: Yes`,
       options.allowSubdomains && `Allow subdomains: Yes`,
+      options.mdream && `Mdream: custom config`,
       options.verbose && `Verbose: Enabled`,
     ].filter(Boolean)
 

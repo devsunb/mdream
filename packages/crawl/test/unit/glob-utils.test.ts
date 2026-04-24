@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { getRegistrableDomain, isUrlExcluded, isValidSitemapXml, matchesGlobPattern, parseUrlPattern } from '../../src/glob-utils.ts'
+import { isUrlIncluded } from '../../src/url-filter.ts'
 
 describe('isUrlExcluded', () => {
   it('returns false when no exclude patterns provided', () => {
@@ -58,6 +59,45 @@ describe('isUrlExcluded', () => {
     expect(isUrlExcluded('https://example.com/admin/users/123', excludePatterns)).toBe(true)
     expect(isUrlExcluded('https://example.com/admin/settings/profile', excludePatterns)).toBe(true)
     expect(isUrlExcluded('https://example.com/public/page', excludePatterns)).toBe(false)
+  })
+})
+
+describe('isUrlIncluded', () => {
+  it('returns true when no include patterns provided', () => {
+    expect(isUrlIncluded('https://example.com/page', [])).toBe(true)
+    expect(isUrlIncluded('https://example.com/page', undefined as any)).toBe(true)
+  })
+
+  it('includes URLs matching path-only patterns', () => {
+    const includePatterns = ['/docs/*', '/guide/*']
+
+    expect(isUrlIncluded('https://example.com/docs/intro', includePatterns)).toBe(true)
+    expect(isUrlIncluded('https://example.com/guide/start', includePatterns)).toBe(true)
+    expect(isUrlIncluded('https://example.com/blog/post', includePatterns)).toBe(false)
+  })
+
+  it('includes URLs matching full URL patterns', () => {
+    const includePatterns = ['https://example.com/docs/**']
+
+    expect(isUrlIncluded('https://example.com/docs/intro', includePatterns)).toBe(true)
+    expect(isUrlIncluded('https://example.com/docs/guide/start', includePatterns)).toBe(true)
+    expect(isUrlIncluded('https://other.com/docs/intro', includePatterns)).toBe(false)
+  })
+
+  it('works with include + exclude together (include first, exclude overrides)', () => {
+    const includePatterns = ['/docs/**']
+    const excludePatterns = ['/docs/private/**']
+
+    const url1 = 'https://example.com/docs/public/page'
+    const url2 = 'https://example.com/docs/private/secret'
+    const url3 = 'https://example.com/blog/post'
+
+    // url1: included and not excluded -> allowed
+    expect(isUrlIncluded(url1, includePatterns) && !isUrlExcluded(url1, excludePatterns)).toBe(true)
+    // url2: included but also excluded -> blocked
+    expect(isUrlIncluded(url2, includePatterns) && !isUrlExcluded(url2, excludePatterns)).toBe(false)
+    // url3: not included -> blocked
+    expect(isUrlIncluded(url3, includePatterns) && !isUrlExcluded(url3, excludePatterns)).toBe(false)
   })
 })
 

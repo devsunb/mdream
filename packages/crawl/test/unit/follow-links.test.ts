@@ -5,19 +5,21 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 // Track fetched URLs for assertions
 const fetchedUrls: string[] = []
 
-// Page content registry: maps URL paths to HTML with links
-const pageRegistry: Record<string, string> = {
-  '/': '<html><head><title>Home</title></head><body><a href="/about">About</a><a href="/blog">Blog</a></body></html>',
-  '/about': '<html><head><title>About</title></head><body><a href="/about/team">Team</a><p>About page</p></body></html>',
-  '/blog': '<html><head><title>Blog</title></head><body><a href="/blog/post-1">Post 1</a></body></html>',
-  '/about/team': '<html><head><title>Team</title></head><body><a href="/about/team/alice">Alice</a><p>Team page</p></body></html>',
-  '/blog/post-1': '<html><head><title>Post 1</title></head><body><p>Blog post</p></body></html>',
-  '/about/team/alice': '<html><head><title>Alice</title></head><body><p>Alice bio</p></body></html>',
+// Page content registry: maps URL paths to { body, contentType }
+const pageRegistry: Record<string, { body: string, contentType: string }> = {
+  '/': { body: '<html><head><title>Home</title></head><body><a href="/about">About</a><a href="/blog">Blog</a></body></html>', contentType: 'text/html' },
+  '/about': { body: '<html><head><title>About</title></head><body><a href="/about/team">Team</a><p>About page</p></body></html>', contentType: 'text/html' },
+  '/blog': { body: '<html><head><title>Blog</title></head><body><a href="/blog/post-1">Post 1</a></body></html>', contentType: 'text/html' },
+  '/about/team': { body: '<html><head><title>Team</title></head><body><a href="/about/team/alice">Alice</a><p>Team page</p></body></html>', contentType: 'text/html' },
+  '/blog/post-1': { body: '<html><head><title>Post 1</title></head><body><p>Blog post</p></body></html>', contentType: 'text/html' },
+  '/about/team/alice': { body: '<html><head><title>Alice</title></head><body><p>Alice bio</p></body></html>', contentType: 'text/html' },
 }
 
-function getHtmlForUrl(url: string): string {
+const defaultPage = { body: '<html><head><title>404</title></head><body><p>Not found</p></body></html>', contentType: 'text/html' }
+
+function getPageForUrl(url: string): { body: string, contentType: string } {
   const path = new URL(url).pathname
-  return pageRegistry[path] || '<html><head><title>404</title></head><body><p>Not found</p></body></html>'
+  return pageRegistry[path] || defaultPage
 }
 
 // Mock ofetch to serve pages from registry
@@ -29,14 +31,15 @@ vi.mock('ofetch', () => {
         return ''
       if (url.includes('sitemap'))
         throw new Error('404')
-      return getHtmlForUrl(url)
+      return getPageForUrl(url).body
     },
     {
       raw: async (url: string, _opts?: any) => {
         fetchedUrls.push(url)
+        const page = getPageForUrl(url)
         return {
-          _data: getHtmlForUrl(url),
-          headers: new Headers({ 'content-type': 'text/html' }),
+          _data: page.body,
+          headers: new Headers({ 'content-type': page.contentType }),
         }
       },
     },
@@ -175,5 +178,94 @@ describe('follow links (BFS crawling)', () => {
 
     // Should process at most 3 URLs total
     expect(fetchedUrls.length).toBeLessThanOrEqual(3)
+  })
+
+  it('respects per-site exclude patterns', async () => {
+    await crawlAndGenerate({
+      urls: ['https://example.com'],
+      outputDir: tmpOut(),
+      maxDepth: 2,
+      followLinks: true,
+      skipSitemap: true,
+      generateLlmsTxt: false,
+      generateLlmsFullTxt: false,
+      generateIndividualMd: false,
+      sites: {
+        'example.com': {
+          exclude: ['*/blog*'],
+        },
+      },
+    })
+
+    const crawledPaths = fetchedUrls.map(u => new URL(u).pathname)
+    expect(crawledPaths).toContain('/')
+    expect(crawledPaths).toContain('/about')
+    // /blog and /blog/post-1 should be excluded by site config
+    expect(crawledPaths).not.toContain('/blog')
+    expect(crawledPaths).not.toContain('/blog/post-1')
+  })
+
+  it('follows .md links from llms.txt without isContentUrl filtering', async () => {
+    // Register llms.txt with markdown links pointing to .md URLs
+    pageRegistry['/llms.txt'] = {
+      body: '# Docs\n\n- [Getting Started](https://example.com/docs/getting-started.md): Intro\n- [API Reference](https://example.com/docs/api.md): API docs\n',
+      contentType: 'text/plain',
+    }
+    pageRegistry['/docs/getting-started.md'] = {
+      body: '<html><head><title>Getting Started</title></head><body><p>Welcome</p></body></html>',
+      contentType: 'text/html',
+    }
+    pageRegistry['/docs/api.md'] = {
+      body: '<html><head><title>API Reference</title></head><body><p>API docs</p></body></html>',
+      contentType: 'text/html',
+    }
+
+    await crawlAndGenerate({
+      urls: ['https://example.com/llms.txt'],
+      outputDir: tmpOut(),
+      maxDepth: 1,
+      followLinks: true,
+      skipSitemap: true,
+      generateLlmsTxt: false,
+      generateLlmsFullTxt: false,
+      generateIndividualMd: false,
+    })
+
+    const crawledPaths = fetchedUrls.map(u => new URL(u).pathname)
+    expect(crawledPaths).toContain('/llms.txt')
+    // .md URLs from llms.txt should be followed (not rejected by isContentUrl)
+    expect(crawledPaths).toContain('/docs/getting-started.md')
+    expect(crawledPaths).toContain('/docs/api.md')
+
+    // Cleanup
+    delete pageRegistry['/llms.txt']
+    delete pageRegistry['/docs/getting-started.md']
+    delete pageRegistry['/docs/api.md']
+  })
+
+  it('respects per-site include patterns', async () => {
+    await crawlAndGenerate({
+      urls: ['https://example.com'],
+      outputDir: tmpOut(),
+      maxDepth: 2,
+      followLinks: true,
+      skipSitemap: true,
+      generateLlmsTxt: false,
+      generateLlmsFullTxt: false,
+      generateIndividualMd: false,
+      sites: {
+        'example.com': {
+          include: ['/about/**'],
+        },
+      },
+    })
+
+    const crawledPaths = fetchedUrls.map(u => new URL(u).pathname)
+    // Home page is the seed URL, always fetched
+    expect(crawledPaths).toContain('/')
+    expect(crawledPaths).toContain('/about')
+    expect(crawledPaths).toContain('/about/team')
+    // /blog should not match the include pattern
+    expect(crawledPaths).not.toContain('/blog')
   })
 })
