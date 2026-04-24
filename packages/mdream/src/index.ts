@@ -121,10 +121,19 @@ function resolveOptions(options: Partial<MdreamOptions>): ResolvedOptions {
     plugins.isolateMain = true
   if (minimal ? options.tailwind !== false : options.tailwind)
     plugins.tailwind = true
-  if (minimal)
-    plugins.filter = options.filter || MINIMAL_FILTER_DEFAULT
-  else if (options.filter)
+  if (minimal) {
+    if (options.filter?.exclude) {
+      // Merge user excludes with minimal defaults
+      const merged = [...new Set([...MINIMAL_FILTER_EXCLUDE as unknown as string[], ...options.filter.exclude])]
+      plugins.filter = { ...options.filter, exclude: merged }
+    }
+    else {
+      plugins.filter = options.filter || MINIMAL_FILTER_DEFAULT
+    }
+  }
+  else if (options.filter) {
     plugins.filter = options.filter
+  }
 
   let extractionHandlers: Record<string, (el: ExtractedElement) => void> | undefined
   if (options.extraction) {
