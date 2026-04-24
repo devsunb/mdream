@@ -1641,6 +1641,21 @@ impl ConvertState {
             };
         }
 
+        // HTML5 optional-close rules: a new sibling of <li>/<dt>/<dd> closes the
+        // currently-open one. Without this, legacy markup like
+        // `<ul><li>a<li>b</ul>` produces escalating nesting.
+        // https://html.spec.whatwg.org/multipage/syntax.html#optional-tags
+        if let Some(id) = tag_id
+            && let Some(current) = self.stack.last().and_then(|n| n.tag_id)
+        {
+            let li_closes_li = id == TAG_LI && current == TAG_LI;
+            let dt_dd_closes_each_other =
+                (id == TAG_DT || id == TAG_DD) && (current == TAG_DT || current == TAG_DD);
+            if li_closes_li || dt_dd_closes_each_other {
+                self.close_node();
+            }
+        }
+
         if let Some(id) = tag_id {
             debug_assert!((id as usize) < MAX_TAG_ID, "tag_id {id} exceeds MAX_TAG_ID {MAX_TAG_ID}");
             if (id as usize) < MAX_TAG_ID {

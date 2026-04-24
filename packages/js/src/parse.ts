@@ -7,6 +7,9 @@ import {
   TAG_A,
   TAG_BLOCKQUOTE,
   TAG_CODE,
+  TAG_DD,
+  TAG_DT,
+  TAG_LI,
   TAG_PRE,
   TAG_TABLE,
   TagIdMap,
@@ -617,6 +620,21 @@ function processOpeningTag(
   // Check if current element needs closing
   if (state.currentNode?.tagHandler?.isNonNesting) {
     closeNode(state.currentNode, state, handleEvent)
+  }
+
+  // HTML5 optional-close rules — a new sibling of certain tags closes the
+  // currently-open one. Without this, legacy markup like `<ul><li>a<li>b</ul>`
+  // produces escalating nesting (each <li> becomes a child of the previous).
+  // https://html.spec.whatwg.org/multipage/syntax.html#optional-tags
+  const currentId = state.currentNode?.tagId
+  if (currentId !== undefined) {
+    const liClosesLi = tagId === TAG_LI && currentId === TAG_LI
+    const dtDdClosesEachOther =
+      (tagId === TAG_DT || tagId === TAG_DD)
+      && (currentId === TAG_DT || currentId === TAG_DD)
+    if (liClosesLi || dtDdClosesEachOther) {
+      closeNode(state.currentNode!, state, handleEvent)
+    }
   }
 
   const tagHandler = state.tagOverrideHandlers?.get(tagName) ?? tagHandlers[tagId]
